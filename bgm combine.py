@@ -341,7 +341,7 @@ def get_organization_details(org_id: str, token: str) -> Optional[Dict[str, Any]
 ###############################################################################
 
 def match_bgm_games_and_save(
-    input_file: str = r"E:\学习资料\项目文件\BaiduTiebaSpider-main\ymproject2\bgm_archive_20250525 (1).xlsx",
+    input_file: str = "bgm_archive_20250525 (1).xlsx",
     output_file: str = "ymgames_matched.xlsx",
     unmatched_file: str = "ymgames_unmatched.xlsx",
     org_output_file: str = "organizations_info.xlsx"

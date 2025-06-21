@@ -197,7 +197,7 @@ def search_ym_top_matches(
 #    防覆盖写入以及临时文件兜底等高级需求。
 
 EXCEL_COLUMNS_MATCHED = [
-    "bgm_id", "bgm游戏", "日文名 (原始)", "中文名 (原始)",
+    "bgm_id", "bgm游戏",
     "name", "chineseName", "ym_id", "score",
     "orgId", "orgName", "orgWebsite", "orgDescription",
     "匹配来源"
@@ -352,7 +352,7 @@ def get_organization_details(org_id: str, token: str) -> Optional[Dict[str, Any]
 ###############################################################################
 
 def match_bgm_games_and_save(
-        input_file: str = r"E:\学习资料\项目文件\BaiduTiebaSpider-main\ymproject2\ymgames_unmatched_with_alias.xlsx",
+        input_file: str = "主表_updated_processed_aliases_20250621_124012.xlsx",
         output_file: str = "ymgames_matched.xlsx",
         unmatched_file: str = "ymgames_unmatched.xlsx",
         org_output_file: str = "organizations_info.xlsx"
@@ -403,7 +403,7 @@ def match_bgm_games_and_save(
 
     # 5. 遍历 Bangumi 行并匹配
     for idx, row in tqdm(df_bgm.iterrows(), total=len(df_bgm), desc="处理游戏"):
-        bgm_id = str(row['id']) if 'id' in row and pd.notna(row['id']) else f"ROW_{idx}"
+        bgm_id = str(row['bgm_id']) if 'bgm_id' in row and pd.notna(row['bgm_id']) else f"ROW_{idx}"
 
         if bgm_id in processed_ids:
             print(f"跳过 ID {bgm_id} （已处理）")
@@ -413,15 +413,19 @@ def match_bgm_games_and_save(
         alias_cols = [col for col in row.index if col.startswith("别名")]
         aliases = [str(row[col]).strip() for col in alias_cols if pd.notna(row[col]) and str(row[col]).strip()]
 
-        if not aliases:
-            print(f"跳过 ID {bgm_id}：所有别名均为空")
-            append_unmatched_to_excel(f"ID_{bgm_id}_空别名", unmatched_file)
-            continue
+        # 1. 获取原始分数，并确保为浮点数，默认0
+        original_score = 0.0
+        if 'score' in row and pd.notna(row['score']):
+            try:
+                original_score = float(row['score'])
+            except (ValueError, TypeError):
+                pass # 如果转换失败，则保持0.0
 
-        print(f"\n正在匹配 ID {bgm_id} (别名: {aliases})")
+        print(f"\n正在匹配 ID {bgm_id} (别名: {aliases}) (原始分数: {original_score})")
 
+        # 2. 查找所有别名中的最佳匹配
         best_match = None
-        best_score = -1.0  # 初始化最高得分
+        best_score = -1.0  # 初始化别名匹配的最高分
         match_source = ""
 
         for i, alias in enumerate(aliases):
@@ -430,17 +434,18 @@ def match_bgm_games_and_save(
                 best_match = matches[0]
                 best_score = best_match["score"]
                 match_source = f"别名{i+1}"
-
-        if best_match:
+        
+        # 3. 比较分数，决定使用新数据还是保留原始数据
+        if best_match and best_score > original_score:
+            print(f" - 别名匹配分数更高 ({best_score} > {original_score})。使用新数据。")
             row_list: List[Dict[str, Any]] = []
-            # ---- 公司信息处理 ----------------------------------------
+            # ---- 公司信息处理 (仅当别名更优时才查询) ----
             org_id = str(best_match.get("orgId", ""))
             org_info = None  # type: Optional[Dict[str, Any]]
 
             if org_id:
                 should_retry = False
                 if org_id in processed_orgs:
-                    # 信息不完整时重试 (最多 3 次)
                     existing = processed_orgs[org_id]["info"]
                     if not existing.get("website") or not existing.get("description"):
                         should_retry = True
@@ -457,16 +462,14 @@ def match_bgm_games_and_save(
                 else:
                     org_info = processed_orgs[org_id]["info"]
 
-            # ---- 组装行数据 -----------------------------------------
+            # ---- 组装新行数据 ----
             row_data = {
                 "bgm_id": bgm_id,
-                "bgm游戏": aliases[0] if aliases else "",
-                "日文名 (原始)": row["日文名"] if "日文名" in row else "",
-                "中文名 (原始)": row["中文名"] if "中文名" in row else "",
+                "bgm游戏": row.get('bgm游戏') or row.get('原始bgm游戏名称'),
                 "name": best_match["name"],
                 "chineseName": best_match["chineseName"],
                 "ym_id": best_match["ym_id"],
-                "score": best_match["score"],
+                "score": best_score,
                 "orgId": org_id,
                 "orgName": (org_info or {}).get("name", best_match.get("orgName", "")),
                 "orgWebsite": (org_info or {}).get("website", best_match.get("orgWebsite", "")),
@@ -474,12 +477,30 @@ def match_bgm_games_and_save(
                 "匹配来源": match_source
             }
             row_list.append(row_data)
-            print(f" - 匹配成功：{best_match['name']} (得分: {best_match['score']})")
-
             append_to_excel(row_list, output_file)
         else:
-            print(" - 未匹配到任何项")
-            append_unmatched_to_excel(f"ID_{bgm_id}_未匹配", unmatched_file)
+            # 如果原始分数更高，或别名未匹配成功
+            if best_match:
+                 print(f" - 原始分数 ({original_score}) 更高或相等 (别名最高分: {best_score})。保留原始数据。")
+            else:
+                 print(f" - 未找到任何别名匹配项。保留原始数据。")
+           
+            # ---- 组装原始行数据 ----
+            row_data = {
+                "bgm_id": bgm_id,
+                "bgm游戏": row.get('bgm游戏') or row.get('原始bgm游戏名称'),
+                "name": row.get('name'),
+                "chineseName": row.get('chineseName'),
+                "ym_id": row.get('ym_id'),
+                "score": original_score,
+                "orgId": row.get('orgId'),
+                "orgName": row.get('orgName'),
+                "orgWebsite": row.get('orgWebsite'),
+                "orgDescription": row.get('orgDescription'),
+                "匹配来源": "原始"
+            }
+            row_list = [row_data]
+            append_to_excel(row_list, output_file)
 
         # 避免触发接口限流
         time.sleep(0.001)
@@ -551,5 +572,3 @@ if __name__ == "__main__":
     # ① Bangumi -> 月幕 首次匹配
     match_bgm_games_and_save()
 
-    # ② 月幕 -> Bangumi 二次匹配
-    match_ym_with_bangumi()
